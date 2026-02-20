@@ -14,6 +14,7 @@
 <body class="dark-mode">
     <!-- Landing Page / Login Overlay -->
     <div id="login-overlay" class="landing-page overlay">
+        <div class="interactive-bg-logo" id="interactive-bg-logo"></div>
         <div class="landing-content animate-fade-in text-center">
             <div class="logo-large mb-2">
                 <img src="/spider-logo.png" alt="Webspider Logo"
@@ -205,10 +206,12 @@
                 to 20 pages.
             </p>
             <p class="mb-4 text-secondary" style="font-size: 0.95em;">
-                This uses significant processing power and is computationally expensive. It should only be used in
-                specific scenarios where you need to track an entire site, not just a single page.
+                Crawling will recursively interact with up to 20 pages on the target site. This carries a <strong>very
+                    high risk of triggering unintended actions</strong>—such as automatically clicking "Delete", "Log
+                Out", or submitting forms—if the bot wanders into interactive elements. Do not use this on authenticated
+                dashboards where random clicking could cause permanent data loss!
                 <br><br>
-                Are you sure you want to enable this heavy operation?
+                Are you certain you want to enable this high-risk operation?
             </p>
             <div class="d-flex justify-end" style="gap: 12px;">
                 <button id="cancel-deep-crawl-btn" type="button" class="btn btn-outline"

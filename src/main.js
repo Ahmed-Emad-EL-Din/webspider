@@ -46,6 +46,18 @@ const confirmDeepCrawlBtn = document.getElementById('confirm-deep-crawl-btn');
 let telegramPollingInterval = null;
 let telegramBotUsername = null;
 
+// Interactive Background Logic
+const interactiveBg = document.getElementById('interactive-bg-logo');
+if (interactiveBg) {
+    document.addEventListener('mousemove', (e) => {
+        if (loginOverlay.style.display !== 'none') {
+            const x = (window.innerWidth / 2 - e.pageX) / 35;
+            const y = (window.innerHeight / 2 - e.pageY) / 35;
+            interactiveBg.style.transform = `translate(calc(-50% + ${-x}px), calc(-50% + ${-y}px)) rotate(${-x / 2}deg) scale(1.05)`;
+        }
+    });
+}
+
 // Initialize Google One Tap / Button
 window.onload = function () {
     Toast.init();
