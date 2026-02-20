@@ -34,4 +34,5 @@ jobs:
           EMAIL_HOST_USER: ${{ secrets.EMAIL_HOST_USER }}
           EMAIL_HOST_PASSWORD: ${{ secrets.EMAIL_HOST_PASSWORD }}
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+          NETLIFY_URL: ${{ secrets.NETLIFY_URL }}
         run: python scraper.py
