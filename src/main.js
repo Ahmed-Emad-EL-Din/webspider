@@ -250,6 +250,8 @@ enableTelegramCheck.addEventListener('change', async (e) => {
 
                     // Hide the instructional prompt paragraph, but keep the button
                     document.querySelector('#telegram-connect-prompt p').style.display = 'none';
+
+                    Toast.success("Telegram connected successfully!");
                 }
             }
         } catch (e) {
@@ -275,6 +277,11 @@ addMonitorForm.addEventListener('submit', async (e) => {
         telegram_notifications_enabled: enableTelegramCheck.checked,
         telegram_chat_id: document.getElementById('telegram-chat-id').value
     };
+
+    if (formData.telegram_notifications_enabled && !formData.telegram_chat_id) {
+        Toast.error("Please completely connect your Telegram account first.");
+        return;
+    }
 
     try {
         const addBtn = addMonitorForm.querySelector('button[type="submit"]');

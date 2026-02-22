@@ -80,6 +80,8 @@ async def summarize_changes(old_text, new_text):
     """
     
     try:
+        # Add a small delay to avoid hitting Gemini rate limits too quickly on concurrent summaries
+        await asyncio.sleep(2)
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=prompt,
@@ -87,7 +89,17 @@ async def summarize_changes(old_text, new_text):
         return response.text.strip()
     except Exception as e:
         print(f"Gemini API Error: {e}")
-        return "Manual check required due to summarization error."
+        # Wait a bit longer and retry once if it's a rate limit or transient error
+        await asyncio.sleep(5)
+        try:
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt,
+            )
+            return response.text.strip()
+        except Exception as retry_e:
+            print(f"Gemini API Retry Error: {retry_e}")
+            return "Manual check required due to summarization error. (API Overloaded)"
 
 async def extract_links(page, base_url):
     domain = urlparse(base_url).netloc
@@ -109,7 +121,7 @@ async def extract_links(page, base_url):
             
     return valid_links
 
-async def scrape_monitor(context, monitor_doc):
+async def scrape_monitor(context, monitor_doc, monitors_col):
     start_url = monitor_doc['url']
     is_deep_crawl = monitor_doc.get('deep_crawl', False)
     max_pages = 20 if is_deep_crawl else 1
@@ -123,25 +135,55 @@ async def scrape_monitor(context, monitor_doc):
     # Authenticate only once strictly on the first URL if needed
     page = await context.new_page()
     try:
-        if monitor_doc.get('has_captcha') and monitor_doc.get('captcha_json'):
-            try:
-                cookies = json.loads(monitor_doc['captcha_json'])
-                await context.add_cookies(cookies)
-                print(f"Injected cookies for {start_url}")
-            except Exception as e:
-                print(f"Error parsing cookies: {e}")
+        # Check for cookies (prioritize auto-extracted, fallback to manual config)
+        has_auto_cookies = 'auto_cookies' in monitor_doc and bool(monitor_doc['auto_cookies'])
+        cookie_source = monitor_doc.get('auto_cookies') if has_auto_cookies else monitor_doc.get('captcha_json')
+        
+        if cookie_source:
+             try:
+                 cookies = cookie_source if has_auto_cookies else json.loads(cookie_source)
+                 await context.add_cookies(cookies)
+                 print(f"Injected existing cookies for {start_url}")
+             except Exception as e:
+                 print(f"Error parsing/injecting cookies: {e}")
 
-        if monitor_doc.get('requires_login'):
+        # Only execute login if they requested it AND we didn't inject auto_cookies
+        # (If auto_cookies are injected but expired, they might land on a login page,
+        # but for a basic flow, we trust the injected session until they manually clear it
+        # or we could make it smarter to detect. For now, try injecting first.)
+        if monitor_doc.get('requires_login') and not has_auto_cookies:
             try:
                 await page.goto(start_url, wait_until="networkidle", timeout=60000)
-                user_input = await page.query_selector('input[type="text"], input[type="email"]')
-                pass_input = await page.query_selector('input[type="password"]')
+                user_input = await page.query_selector('input[type="text"], input[type="email"], input[name="acct"], input[name="username"], input[name="user"], input[id="login"]')
+                pass_input = await page.query_selector('input[type="password"], input[name="pw"], input[name="password"]')
+                
                 if user_input and pass_input:
                     await user_input.fill(monitor_doc['username'])
                     await pass_input.fill(monitor_doc['password'])
                     await page.keyboard.press("Enter")
-                    await page.wait_for_load_state("networkidle")
-                    print("Attempted login submission")
+                    # 1. Provide an initial forced pause to let the login settle and set cookies
+                    await page.wait_for_timeout(2000) 
+
+                    # 2. Handle post-login redirects to dashboards/homepages
+                    if page.url != start_url:
+                        print(f"Redirected after login. Actively navigating back to intended target: {start_url}")
+                        await page.goto(start_url, wait_until="networkidle", timeout=60000)
+                        
+                    # 3. Extract and preserve session cookies
+                    raw_cookies = await context.cookies()
+                    if raw_cookies:
+                        try:
+                            # Force literal dict serialization to prevent PyMongo BSON errors
+                            clean_cookies = [dict(c) for c in raw_cookies]
+                            print(f"Successfully extracted and saved {len(clean_cookies)} session cookies.")
+                            result = monitors_col.update_one(
+                                {"_id": monitor_doc["_id"]},
+                                {"$set": {"auto_cookies": clean_cookies}}
+                            )
+                            monitor_doc['auto_cookies'] = clean_cookies # update local reference
+                        except Exception as cookie_err:
+                            print(f"Failed to save cookies to DB: {cookie_err}")
+                            
             except Exception as e:
                 print(f"Login automated step failed: {e}")
 
@@ -182,10 +224,17 @@ async def scrape_monitor(context, monitor_doc):
     finally:
         await page.close()
 
-async def process_monitor(monitor, context, monitors_col, semaphore):
+async def process_monitor(monitor, browser, monitors_col, semaphore):
     async with semaphore:
-        new_text = await scrape_monitor(context, monitor)
-        
+        # Create an isolated browser context per monitor
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        )
+        try:
+            new_text = await scrape_monitor(context, monitor, monitors_col)
+        finally:
+            await context.close()
+            
         if new_text is None:
             return
         
@@ -253,16 +302,13 @@ async def run_worker():
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        )
         
         # Limit concurrent browser tabs to 5
         semaphore = asyncio.Semaphore(5)
         
         # Create a task for each monitor
         tasks = [
-            process_monitor(monitor, context, monitors_col, semaphore)
+            process_monitor(monitor, browser, monitors_col, semaphore)
             for monitor in monitors
         ]
         
